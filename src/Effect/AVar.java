@@ -5,6 +5,7 @@
     public static final class AVarCell {
         Object value = __EMPTY;
         Object error = null;
+        int draining = 0;
         final java.util.ArrayDeque<java.util.function.Function<Object, Object>> takes = new java.util.ArrayDeque<>();
         final java.util.ArrayDeque<java.util.function.Function<Object, Object>> reads = new java.util.ArrayDeque<>();
         final java.util.ArrayDeque<Object[]> puts = new java.util.ArrayDeque<>();
@@ -16,35 +17,64 @@
         if (effect instanceof java.util.function.Supplier) ((java.util.function.Supplier<Object>) effect).get();
     }
 
+    private static void __notifyReaders(AVarCell cell, java.util.Map<String, Object> util, Object value) {
+        java.util.function.Function<Object, Object> right = (java.util.function.Function<Object, Object>) util.get("right");
+        while (!cell.reads.isEmpty()) __runCallback(cell.reads.poll(), right.apply(value));
+    }
+
     private static void __drain(AVarCell cell, java.util.Map<String, Object> util) {
         java.util.function.Function<Object, Object> right = (java.util.function.Function<Object, Object>) util.get("right");
         if (cell.error != null) return;
-        while (cell.value != __EMPTY) {
-            if (!cell.takes.isEmpty()) {
-                java.util.function.Function<Object, Object> taker = cell.takes.poll();
-                Object taken = cell.value;
-                cell.value = __EMPTY;
-                __runCallback(taker, right.apply(taken));
-            } else if (!cell.reads.isEmpty()) {
-                java.util.function.Function<Object, Object> reader = cell.reads.poll();
-                __runCallback(reader, right.apply(cell.value));
-                return;
-            } else {
+        cell.draining++;
+        try {
+            while (true) {
+                if (cell.value != __EMPTY) __notifyReaders(cell, util, cell.value);
+                if (cell.value != __EMPTY && !cell.takes.isEmpty()) {
+                    Object taken = cell.value;
+                    cell.value = __EMPTY;
+                    __runCallback(cell.takes.poll(), right.apply(taken));
+                    continue;
+                }
+                if (cell.value == __EMPTY && !cell.puts.isEmpty()) {
+                    Object[] put = cell.puts.poll();
+                    java.util.function.Function<Object, Object> taker = cell.takes.poll();
+                    __notifyReaders(cell, util, put[0]);
+                    if (taker != null) {
+                        __runCallback(taker, right.apply(put[0]));
+                    } else {
+                        cell.value = put[0];
+                    }
+                    __runCallback((java.util.function.Function<Object, Object>) put[1], right.apply(null));
+                    continue;
+                }
                 return;
             }
+        } finally {
+            cell.draining--;
         }
-        while (!cell.puts.isEmpty()) {
-            Object[] put = cell.puts.poll();
-            if (!cell.takes.isEmpty()) {
-                java.util.function.Function<Object, Object> taker = cell.takes.poll();
-                __runCallback(taker, right.apply(put[0]));
-                __runCallback((java.util.function.Function<Object, Object>) put[1], right.apply(null));
+    }
+
+    // A value offered to a cell: waiting readers observe it, a waiting taker
+    // consumes it, otherwise the cell is filled; the put callback runs last.
+    private static boolean __offer(AVarCell cell, Object value, java.util.function.Function<Object, Object> callback, java.util.Map<String, Object> util) {
+        java.util.function.Function<Object, Object> right = (java.util.function.Function<Object, Object>) util.get("right");
+        java.util.function.Function<Object, Object> taker = cell.takes.poll();
+        cell.draining++;
+        try {
+            __notifyReaders(cell, util, value);
+            if (taker != null) {
+                __runCallback(taker, right.apply(value));
+            } else if (cell.value == __EMPTY) {
+                cell.value = value;
             } else {
-                cell.value = put[0];
-                __runCallback((java.util.function.Function<Object, Object>) put[1], right.apply(null));
-                return;
+                return false;
             }
+            if (callback != null) __runCallback(callback, right.apply(null));
+        } finally {
+            cell.draining--;
         }
+        __drain(cell, util);
+        return true;
     }
 
     private static AVarCell __avar(Object avar) { return (AVarCell) avar; }
@@ -68,8 +98,8 @@
                 synchronized (cell) {
                     if (cell.error != null) return null;
                     cell.error = error;
-                    while (!cell.takes.isEmpty()) __runCallback(cell.takes.poll(), left.apply(error));
                     while (!cell.reads.isEmpty()) __runCallback(cell.reads.poll(), left.apply(error));
+                    while (!cell.takes.isEmpty()) __runCallback(cell.takes.poll(), left.apply(error));
                     while (!cell.puts.isEmpty()) {
                         Object[] put = cell.puts.poll();
                         __runCallback((java.util.function.Function<Object, Object>) put[1], left.apply(error));
@@ -119,13 +149,7 @@
                     AVarCell cell = __avar(avar);
                     if (cell.error != null) throw __asError(cell.error);
                     if (cell.value != __EMPTY) return false;
-                    if (!cell.takes.isEmpty()) {
-                        java.util.function.Function<Object, Object> taker = cell.takes.poll();
-                        __runCallback(taker, ((java.util.function.Function<Object, Object>) util.get("right")).apply(value));
-                    } else {
-                        cell.value = value;
-                    }
-                    __drain(cell, util);
+                    __offer(cell, value, null, util);
                     return true;
                 }
             };
@@ -145,7 +169,7 @@
                         return (java.util.function.Supplier<Object>) () -> null;
                     }
                     cell.takes.add((java.util.function.Function<Object, Object>) callback);
-                    __drain(cell, util);
+                    if (cell.draining == 0) __drain(cell, util);
                 }
                 return (java.util.function.Supplier<Object>) () -> {
                     synchronized (avar) { cell.takes.remove(callback); }
@@ -168,7 +192,7 @@
                         return (java.util.function.Supplier<Object>) () -> null;
                     }
                     cell.reads.add((java.util.function.Function<Object, Object>) callback);
-                    __drain(cell, util);
+                    if (cell.draining == 0) __drain(cell, util);
                 }
                 return (java.util.function.Supplier<Object>) () -> {
                     synchronized (avar) { cell.reads.remove(callback); }
@@ -193,7 +217,7 @@
                         return (java.util.function.Supplier<Object>) () -> null;
                     }
                     cell.puts.add(put);
-                    __drain(cell, util);
+                    if (cell.draining == 0) __drain(cell, util);
                 }
                 return (java.util.function.Supplier<Object>) () -> {
                     synchronized (avar) { cell.puts.remove(put); }
