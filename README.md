@@ -1,5 +1,10 @@
 # AVar
 
+## JVM tests
+
+`./bin/test` selects `avar` in the [common isolated runner](../javapurs/docs/testing.md#port-particulier), preserving this checkout and its outputs.
+Use `./bin/test --help` for options and `./bin/test --clean` to rebuild the backend. The linked guide covers prerequisites, Java target/runtime settings and retained failure logs.
+
 [![CI](https://github.com/purescript-contrib/purescript-avar/workflows/CI/badge.svg?branch=main)](https://github.com/purescript-contrib/purescript-avar/actions?query=workflow%3ACI+branch%3Amain)
 [![Release](https://img.shields.io/github/release/purescript-contrib/purescript-avar.svg)](https://github.com/purescript-contrib/purescript-avar/releases)
 [![Pursuit](https://pursuit.purescript.org/packages/purescript-avar/badge)](https://pursuit.purescript.org/packages/purescript-avar)
@@ -17,7 +22,7 @@ spago install avar
 
 ## Quick start
 
-The quick start hasn't been written yet (contributions are welcome!). The quick start covers a common, minimal use case for the library, whereas longer examples and tutorials are kept in the [docs directory](./docs).
+The quick start hasn't been written yet (contributions are welcome!). Usage examples are available in [the test suite](./test).
 
 ## Documentation
 
