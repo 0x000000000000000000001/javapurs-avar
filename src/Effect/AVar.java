@@ -2,13 +2,23 @@
     // up for takes, reads and puts, and a kill notifies every waiter.
     private static final Object __EMPTY = new Object();
 
+    private static final class PendingPut {
+        final Object value;
+        final java.util.function.Function<Object, Object> callback;
+
+        PendingPut(Object value, java.util.function.Function<Object, Object> callback) {
+            this.value = value;
+            this.callback = callback;
+        }
+    }
+
     public static final class AVarCell {
         Object value = __EMPTY;
         Object error = null;
         int draining = 0;
         final java.util.ArrayDeque<java.util.function.Function<Object, Object>> takes = new java.util.ArrayDeque<>();
         final java.util.ArrayDeque<java.util.function.Function<Object, Object>> reads = new java.util.ArrayDeque<>();
-        final java.util.ArrayDeque<Object[]> puts = new java.util.ArrayDeque<>();
+        final java.util.ArrayDeque<PendingPut> puts = new java.util.ArrayDeque<>();
     }
 
     private static void __runCallback(java.util.function.Function<Object, Object> callback, Object either) {
@@ -36,15 +46,15 @@
                     continue;
                 }
                 if (cell.value == __EMPTY && !cell.puts.isEmpty()) {
-                    Object[] put = cell.puts.poll();
+                    PendingPut put = cell.puts.poll();
                     java.util.function.Function<Object, Object> taker = cell.takes.poll();
-                    __notifyReaders(cell, util, put[0]);
+                    __notifyReaders(cell, util, put.value);
                     if (taker != null) {
-                        __runCallback(taker, right.apply(put[0]));
+                        __runCallback(taker, right.apply(put.value));
                     } else {
-                        cell.value = put[0];
+                        cell.value = put.value;
                     }
-                    __runCallback((java.util.function.Function<Object, Object>) put[1], right.apply(null));
+                    __runCallback(put.callback, right.apply(null));
                     continue;
                 }
                 return;
@@ -101,8 +111,8 @@
                     while (!cell.reads.isEmpty()) __runCallback(cell.reads.poll(), left.apply(error));
                     while (!cell.takes.isEmpty()) __runCallback(cell.takes.poll(), left.apply(error));
                     while (!cell.puts.isEmpty()) {
-                        Object[] put = cell.puts.poll();
-                        __runCallback((java.util.function.Function<Object, Object>) put[1], left.apply(error));
+                        PendingPut put = cell.puts.poll();
+                        __runCallback(put.callback, left.apply(error));
                     }
                 }
                 return null;
@@ -208,7 +218,7 @@
                 Object avar = avarObj;
                 java.util.Map<String, Object> util = (java.util.Map<String, Object>) utilObj;
                 AVarCell cell;
-                Object[] put = new Object[]{value, callback};
+                PendingPut put = new PendingPut(value, (java.util.function.Function<Object, Object>) callback);
                 synchronized (avar) {
                     cell = __avar(avar);
                     if (cell.error != null) {
